@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<workflow-app xmlns="uri:oozie:workflow:0.5"
+              name="Cvdp${project}_${workflow}_WF">
+    <global>
+        <job-tracker>${job_tracker}</job-tracker>
+        <name-node>${name_node}</name-node>
+        <configuration>
+            <property>
+                <name>mapreduce.job.queuename</name>
+                <value>${oozie_queue_name}</value>
+            </property>
+            <property>
+                <name>oozie.launcher.mapreduce.job.user.classpath.first</name>
+                <value>true</value>
+            </property>
+            <property>
+                <name>oozie.launcher.mapreduce.task.classpath.user.precedence</name>
+                <value>true</value>
+            </property>
+        </configuration>
+    </global>
+    <credentials>
+        <credential name="hiveCredentials" type="hive2">
+            <property>
+                <name>hive2.jdbc.url</name>
+                <value>${hive_beeline_server}</value>
+            </property>
+            <property>
+                <name>hive2.server.principal</name>
+                <value>${hive_kerberos_principal}</value>
+            </property>
+        </credential>
+        <credential name="hbaseCredentials" type="hbase">
+        </credential>
+    </credentials>
+    <start to="Input_Check" />
+
+    <action name="BaiduIVI_Run_Receive">
+        <java>
+            <main-class>com.ford.it.cvdp.receive.BaiduIVIReceive</main-class>
+            <arg>inputPath=${path_hdfs_raw}/</arg>
+            <arg>workflowType=${workflow_execution_type}</arg>
+            <file>${path_custom_jar_lib}/CvdpBaiduIVI.jar</file>
+        </java>
+        <ok to="Input_Check" />
+        <error to="On_Failure_Notification" />
+    </action>
+
+    <decision name="Input_Check">
+        <switch>
+            <case to="Step1_Move_Input_to_Inprocess"> ${fs:dirSize(path_hdfs_input) gt 0} </case>
+            <default to="No_Input_Records_Notification" />
+        </switch>
+    </decision>
+
+    <!-- Move files from Input folder to Inprocess Folder -->
+
+    <!-- Move files from Input folder to Inprocess Folder -->
+
+    <action name="Step1_Move_Input_to_Inprocess">
+        <java>
+            <prepare>
+                <mkdir path='${path_hdfs_inprocess}/${wf:id()}' />
+            </prepare>
+            <main-class>com.ford.it.cvdp.driver.HdfsMassFileMove</main-class>
+            <java-opts>-Dsun.security.krb5.debug=true</java-opts>
+            <arg>${path_hdfs_input}/</arg>
+            <arg>${path_hdfs_inprocess}/${wf:id()}</arg>
+            <file>${path_custom_jar_lib}/CvdpCommon.jar#CvdpCommon.jar</file>
+            <file>${path_custom_jar_lib}/lib/itcore.jar#itcore.jar</file>
+            <file>${environment_hdfs_folder}/Workflow/KEYS/cvdp_jaas.conf#cvdp_jaas.conf</file>
+            <file>${kerberos_keytab_file}#${kerberos_keytab_filename}</file>
+        </java>
+        <ok to="Step2_Decode_Transform" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+    <action name="No_Input_Records_Notification">
+        <email xmlns="uri:oozie:email-action:0.1">
+            <to>${email_recipient}</to>
+            <subject>${email_subject}: No input Records</subject>
+            <body>There were no Input Records for for
+                Cvdp${project}_${workflow}_WF (${wf:id()}) to process.
+
+                Please check the following logs for further details:
+
+                -From Internet Explorer (Hadoop Hue):
+                ${log_viewer1}/${wf:id()}//
+                (Manually add the last '/' on the link above)
+
+                -From FireFox (Hadoop Logs) with use of MIT Kerberos Ticket Manager:
+                ${log_viewer2}/${wf:id()}?show=graph
+                ${log_viewer3}/${wf:id()}
+
+                -For more information on how to set-up MIT Kerberos for Windows Ticket
+                Manager:
+                click on http://www.hpc.ford.com/help/hadoop/odbc.html
+            </body>
+        </email>
+        <ok to="end" />
+        <error to="end" />
+    </action>
+
+    <action name="Step2_Decode_Transform">
+        <java>
+            <prepare>
+                <delete path="${name_node}${path_hdfs_transformed}" />
+            </prepare>
+            <main-class>com.ford.it.cvdp.driver.MapReduceDriver</main-class>
+            <!--java-opts>-Dsun.security.krb5.debug=true</java-opts -->
+            <arg>mapper=com.ford.it.cvdp.mapper.BaiduIVIMapper</arg>
+            <arg>inputPath=${path_hdfs_inprocess}/${wf:id()}/</arg>
+            <arg>outputPath=${path_hdfs_transformed}/</arg>
+            <arg>useReducedProps=true</arg>
+            <arg>libjarPath=${path_custom_jar_lib}/CvdpBaiduIVI.jar</arg>
+            <arg>wfid=${wf:id()}</arg>
+        </java>
+        <ok to="Step3_GoodRecords_Check" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+    <decision name="Step3_GoodRecords_Check">
+        <switch>
+            <case to="Step4_GoodRecords_Move"> ${fs:dirSize(path_hdfs_transformed_good) gt 0} </case>
+            <default to="No_Good_Records_Notification" />
+        </switch>
+    </decision>
+
+    <action name="No_Good_Records_Notification">
+        <email xmlns="uri:oozie:email-action:0.1">
+            <to>${email_recipient}</to>
+            <subject>${email_subject}: No Good Records</subject>
+            <body>There were no Good Records for Cvdp${project}_${workflow}_WF
+                (${wf:id()}) to process.
+
+                Please check the following logs for further details:
+
+                -From Internet Explorer (Hadoop Hue):
+                ${log_viewer1}/${wf:id()}//
+                (Manually add the last '/' on the link above)
+
+                -From FireFox (Hadoop Logs) with use of MIT Kerberos Ticket Manager:
+                ${log_viewer2}/${wf:id()}?show=graph
+                ${log_viewer3}/${wf:id()}
+
+                -For more information on how to set-up MIT Kerberos for Windows Ticket
+                Manager:
+                click on http://www.hpc.ford.com/help/hadoop/odbc.html
+            </body>
+        </email>
+        <ok to="Capture_Failure_Metrics" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+    <action name="Step4_GoodRecords_Move">
+        <fs>
+            <delete path="${name_node}${path_hdfs_staging}/${table_stage}" />
+            <mkdir path="${path_hdfs_staging}/${table_stage}" />
+            <move source="${path_hdfs_transformed_good}/*"
+                  target="${path_hdfs_staging}/${table_stage}" />
+        </fs>
+        <ok to="Step5_Beeline_Extract_Duplicate" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+    <!-- ****** Prevents exact data file from being loaded into staging table
+        twice ****** -->
+    <action name="Step5_Beeline_Extract_Duplicate"
+            cred="hiveCredentials">
+        <hive2 xmlns="uri:oozie:hive2-action:0.1">
+            <prepare>
+                <delete
+                        path="${name_node}${path_hdfs_staging}/${table_stage_non_dup}" />
+                <delete
+                        path="${name_node}${path_hdfs_staging}/${table_stage_temp_dup_key}" />
+                <mkdir
+                        path="${name_node}${path_hdfs_staging}/${table_stage_non_dup}" />
+                <mkdir
+                        path="${name_node}${path_hdfs_staging}/${table_stage_temp_dup_key}" />
+            </prepare>
+            <jdbc-url>${hive_beeline_server}</jdbc-url>
+            <script>${path_hdfs_workflow_root}/Extract_Duplicate.ql</script>
+            <param>db_name=${hive_database_name}</param>
+            <param>current_user=${kerberos_user_name}</param>
+            <param>step_job_name=${wf:id()}_Step5_Beeline_Duplicate_Extracting
+            </param>
+        </hive2>
+        <ok to="Step6_Beeline_Master_Loading" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+    <!-- ****** Load Staging table data into Master ****** -->
+    <action name="Step6_Beeline_Master_Loading"
+            cred="hiveCredentials">
+        <hive2 xmlns="uri:oozie:hive2-action:0.1">
+            <jdbc-url>${hive_beeline_server}</jdbc-url>
+            <script>${path_hdfs_workflow_root}/Master_Loading.ql</script>
+            <param>db_name=${hive_database_name}</param>
+            <param>current_user=${kerberos_user_name}</param>
+            <param>step_job_name=${wf:id()}_Step6_Beeline_Master_Loading</param>
+        </hive2>
+        <ok to="Capture_Success_Metrics" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+
+    <!-- ****** Handling On Success ****** -->
+    <action name="Capture_Success_Metrics">
+        <java>
+            <main-class>${metrics_driver_class}</main-class>
+            <java-opts>-Dsun.security.krb5.debug=true</java-opts>
+            <arg>metricsClass=${metrics_calculator_class}</arg>
+            <arg>fileType=${fileName}</arg>
+            <arg>workflowId=${wf:id()}</arg>
+            <arg>workflowName=${workflow}</arg>
+            <arg>userName=${kerberos_user_name}</arg>
+            <arg>inputPath=${path_hdfs_inprocess}/${wf:id()}</arg>
+            <arg>nondupStagingPath=${path_hdfs_nondup_st_table}</arg>
+            <arg>tempdupStagingPath=${path_hdfs_temp_dup_st_table}</arg>
+            <arg>invalidPath=${path_hdfs_transfored_bad}</arg>
+            <arg>masterTableNm=${table_master}</arg>
+            <arg>archiveDirPath=${path_hdfs_success}</arg>
+            <arg>ignoreBlankInput=true</arg>
+            <arg>processStatusCol=process_status</arg>
+            <file>${path_custom_jar_lib}/CvdpCommon.jar#CvdpCommon.jar</file>
+        </java>
+        <ok to="Beeline_Dup_Loading" />
+        <error to="Warning_Notification_On_Success_Metrics" />
+    </action>
+
+    <action name="Warning_Notification_On_Success_Metrics">
+        <email xmlns="uri:oozie:email-action:0.1">
+            <to>${email_recipient}</to>
+            <subject>${email_subject} Warning</subject>
+            <body>Failed in the ${wf:lastErrorNode()} process.
+
+                Please check the following logs for further details:
+                From Internet Explorer (Hadoop Hue):
+                ${log_viewer1}/${wf:id()}//
+                (Manually add the last '/' on the link above)
+
+                From FireFox (Hadoop Logs) with use of MIT Kerberos Ticket Manager:
+                ${log_viewer2}/${wf:id()}?show=graph
+                ${log_viewer3}/${wf:id()}
+
+                For more information on how to set-up MIT Kerberos for Windows Ticket
+                Manager:
+                click on http://www.hpc.ford.com/help/hadoop/odbc.html
+            </body>
+        </email>
+
+        <ok to="Beeline_Dup_Loading" />
+        <error to="Beeline_Dup_Loading" />
+    </action>
+
+    <!-- ****** Saves duplicated sha keys ****** -->
+    <action name="Beeline_Dup_Loading" cred="hiveCredentials">
+        <hive2 xmlns="uri:oozie:hive2-action:0.1">
+            <jdbc-url>${hive_beeline_server}</jdbc-url>
+            <script>${path_hdfs_workflow_root}/Dup_Loading.ql</script>
+            <param>db_name=${hive_database_name}</param>
+            <param>current_user=${kerberos_user_name}</param>
+            <param>step_job_name=${wf:id()}_Beeline_Dup_Loading</param>
+        </hive2>
+        <ok to="BadRecords_Check" />
+        <error to="Capture_Failure_Metrics" />
+    </action>
+
+    <decision name="BadRecords_Check">
+        <switch>
+            <case to="Move_BadRecords_To_Invalid_Table"> ${fs:dirSize(path_hdfs_transfored_bad) gt 0} </case>
+            <default to="On_Success" />
+        </switch>
+    </decision>
+
+    <action name="Move_BadRecords_To_Invalid_Table">
+        <fs>
+            <move source='${path_hdfs_transfored_bad}/*'
+                  target='${path_hdfs_invalid}' />
+        </fs>
+        <ok to="On_Success" />
+        <error to="On_Failure_Notification" />
+    </action>
+
+    <action name="On_Success">
+        <fs>
+            <mkdir path='${path_hdfs_success}' />
+            <move source='${path_hdfs_inprocess}/${wf:id()}'
+                  target='${path_hdfs_success}/' />
+        </fs>
+        <ok to="end" />
+        <error to="On_Failure_Notification" />
+    </action>
+
+    <!-- ****** Handling On Failure ****** -->
+    <action name="Capture_Failure_Metrics">
+        <java>
+            <main-class>${metrics_driver_class}</main-class>
+            <java-opts>-Dsun.security.krb5.debug=true</java-opts>
+            <arg>metricsClass=${metrics_calculator_class}</arg>
+            <arg>fileType=${fileName}</arg>
+            <arg>workflowId=${wf:id()}</arg>
+            <arg>workflowName=${workflow}</arg>
+            <arg>userName=${kerberos_user_name}</arg>
+            <arg>workflowFailure=true</arg>
+            <arg>failedStep=${wf:lastErrorNode()}</arg>
+            <arg>masterTableNm=${table_master}</arg>
+            <arg>archiveDirPath=${path_hdfs_failure}</arg>
+            <file>${path_custom_jar_lib}/CvdpCommon.jar#CvdpCommon.jar</file>
+        </java>
+        <ok to="On_Failure_Notification" />
+        <error to="On_Failure_Notification" />
+    </action>
+
+    <action name="On_Failure_Notification">
+        <email xmlns="uri:oozie:email-action:0.1">
+            <to>${email_recipient}</to>
+            <subject>${email_subject} Failed</subject>
+            <body>The workflow Cvdp${project}_${workflow}_WF (${wf:id()})
+                Failed in the ${wf:lastErrorNode()} process.
+
+                Please check the following logs for further details:
+                From Internet Explorer (Hadoop Hue):
+                ${log_viewer1}/${wf:id()}//
+                (Manually add the last '/' on the link above)
+
+                From FireFox (Hadoop Logs) with use of MIT Kerberos Ticket Manager:
+                ${log_viewer2}/${wf:id()}?show=graph
+                ${log_viewer3}/${wf:id()}
+
+                For more information on how to set-up MIT Kerberos for Windows Ticket
+                Manager:
+                click on http://www.hpc.ford.com/help/hadoop/odbc.html
+            </body>
+        </email>
+
+        <ok to="On_Failure" />
+        <error to="On_Failure" />
+    </action>
+
+    <action name="On_Failure">
+        <fs>
+            <mkdir path="${path_hdfs_inprocess}/${wf:id()}" />
+            <move source='${path_hdfs_inprocess}/${wf:id()}'
+                  target='${path_hdfs_failure}/' />
+        </fs>
+        <ok to="fail" />
+        <error to="fail" />
+    </action>
+
+    <kill name="fail">
+        <message>Cvdp${project}_${workflow}_WF failed, error
+            message[${wf:errorMessage(wf:lastErrorNode())}]</message>
+    </kill>
+
+    <end name="end" />
+</workflow-app>
